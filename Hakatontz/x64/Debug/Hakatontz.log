@@ -1,0 +1,2 @@
+﻿C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VC\v170\Microsoft.CppBuild.targets(538,5): warning MSB8028: промежуточный каталог (x64\Debug\) содержит файлы, которые используются совместно с другим проектом (Hakatontz.vcxproj).  Это может привести к ошибкам очистки и перестроения.
+  Hakatontz.vcxproj -> C:\Users\rasul\source\repos\Hakatontz\x64\Debug\NotA.exe
