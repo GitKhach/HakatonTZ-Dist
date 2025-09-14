@@ -68,14 +68,41 @@ vector<string> SplitCSV(const string& line) {
     return result;
 }
 
+// читаем файл целиком, детектируем BOM UTF-8 и возвращаем vector<string> строк в UTF-8
+static vector<string> ReadFileLinesUtf8(const wstring& filename) {
+    vector<string> out;
+    ifstream file(filename, ios::binary);
+    if (!file.is_open()) return out;
+
+    // прочитать всё в string
+    string data((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
+    if (data.size() >= 3 &&
+        (unsigned char)data[0] == 0xEF &&
+        (unsigned char)data[1] == 0xBB &&
+        (unsigned char)data[2] == 0xBF) {
+        // убираем BOM
+        data = data.substr(3);
+    }
+    // разделяем по \n (удаляем \r)
+    string cur;
+    for (char ch : data) {
+        if (ch == '\r') continue;
+        if (ch == '\n') {
+            out.push_back(cur);
+            cur.clear();
+        }
+        else cur.push_back(ch);
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
 vector<ClientPush> ParseCSV(const wstring& filename) {
     vector<ClientPush> results;
-    ifstream file(filename, ios::binary);
-    if (!file.is_open()) return results;
-
-    string line;
+    auto lines = ReadFileLinesUtf8(filename);
+    if (lines.empty()) return results;
     bool firstLine = true;
-    while (getline(file, line)) {
+    for (auto& line : lines) {
         if (firstLine) { firstLine = false; continue; }
         auto fields = SplitCSV(line);
         if (fields.size() >= 4) {
@@ -129,25 +156,28 @@ LRESULT CALLBACK EditObr(HWND Eokno, UINT uMsg, WPARAM wParam, LPARAM lParam) {
             else if (EditID == 3) newName = L"clients.csv";
 
             if (newName) {
-                wchar_t dstPath[MAX_PATH];
-                wcscpy_s(dstPath, GetExeFolder().c_str());
-                wcscat_s(dstPath, L"\\");
-                wcscat_s(dstPath, newName);
+                wchar_t dstPath[MAX_PATH] = {};
+                // корректно используем буфер размер
+                wcscpy_s(dstPath, MAX_PATH, GetExeFolder().c_str());
+                wcscat_s(dstPath, MAX_PATH, L"\\");
+                wcscat_s(dstPath, MAX_PATH, newName);
 
                 if (CopyFileW(filePath, dstPath, FALSE))
                     SetWindowTextW(Eokno, L"Файл успешно скопирован\n(Вы можете вставить другие файлы)");
-                else
-                    MessageBoxW(Eokno, L"Ошибка при копировании", L"Error", MB_ICONERROR);
+                else {
+                    // для отладки показываем ошибку
+                    wchar_t err[256];
+                    swprintf_s(err, L"Ошибка при копировании. Код: %u", GetLastError());
+                    MessageBoxW(Eokno, err, L"Error", MB_ICONERROR);
+                }
             }
         }
         DragFinish(wDrop);
         return 0;
     }
-    return CallWindowProcW(
-        (WNDPROC)(GetDlgCtrlID(Eokno) == 1 ? OldWndProc1 :
-            GetDlgCtrlID(Eokno) == 2 ? OldWndProc2 : OldWndProc3),
-        Eokno, uMsg, wParam, lParam
-    );
+    WNDPROC prev = (WNDPROC)(GetDlgCtrlID(Eokno) == 1 ? OldWndProc1 :
+        GetDlgCtrlID(Eokno) == 2 ? OldWndProc2 : OldWndProc3);
+    return CallWindowProcW(prev, Eokno, uMsg, wParam, lParam);
 }
 
 // ================== MAIN WINDOW ==================
@@ -176,8 +206,16 @@ LRESULT CALLBACK Obr(HWND okno, UINT uMsg, WPARAM wParam, LPARAM lParam) {
             sei.lpVerb = L"open";
             wstring aipyPath = exeFolder + L"\\AIpy.exe";
             sei.lpFile = aipyPath.c_str();
+            // важная строчка — задаём рабочую директорию
+            sei.lpDirectory = exeFolder.c_str();
             sei.nShow = SW_SHOWNORMAL;
-            if (ShellExecuteExW(&sei) && sei.hProcess) {
+            if (!ShellExecuteExW(&sei)) {
+                wchar_t err[256];
+                swprintf_s(err, L"Не удалось запустить AIpy. Код: %u", GetLastError());
+                MessageBoxW(NULL, err, L"Error", MB_ICONERROR);
+                return 0;
+            }
+            if (sei.hProcess) {
                 WaitForSingleObject(sei.hProcess, INFINITE);
                 CloseHandle(sei.hProcess);
             }
@@ -203,9 +241,18 @@ LRESULT CALLBACK Obr(HWND okno, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
 // ================== WINMAIN ==================
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
+    // Удаляем старые файлы в корне папки, где лежит NotA.exe
     wstring exeFolder = GetExeFolder();
-    for (auto& f : { L"transactions.csv", L"transfers.csv", L"clients.csv", L"clients_push.csv" }) {
-        DeleteFileW((exeFolder + L"\\" + f).c_str());
+    for (auto& f : {
+        L"transactions.csv",
+        L"transfers.csv",
+        L"clients.csv",
+        L"clients_push.csv",
+        L"clients_top4.csv" })
+    {
+        wstring path = exeFolder + L"\\" + f;
+        // тихое удаление; можно раскомментировать MessageBox при ошибке
+        DeleteFileW(path.c_str());
     }
 
     WNDCLASSW wc = {};
@@ -215,7 +262,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassW(&wc);
 
-    HWND Mokno = CreateWindowExW(0, L"UI", L"Cpp Push App", WS_OVERLAPPEDWINDOW,
+    HWND Mokno = CreateWindowExW(0, L"UI", L"NotA", WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 960, 540, NULL, NULL, hInstance, nullptr);
     if (!Mokno) return 0;
     ShowWindow(Mokno, nCmdShow);
@@ -249,5 +296,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     }
     return (int)msg.wParam;
 }
+
+
 
 
