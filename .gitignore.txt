@@ -1,23 +1,17 @@
-# Временные файлы Visual Studio
-*.obj
-*.pch
-*.pdb
-*.idb
-*.class
+# Visual Studio
+.vs/
 *.suo
 *.user
-*.cache
-*.ilk
-*.log
-*.vs/
-*.vcxproj.user
-*.exe
+*.idb
+*.ipch
+*.pch
 
-# Папки
+# Сборки
 bin/
 obj/
 Debug/
 Release/
+*.exe
 
 # Системные файлы
 .DS_Store
